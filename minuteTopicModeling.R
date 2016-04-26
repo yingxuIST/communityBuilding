@@ -1,6 +1,6 @@
 ### set a working directory
 getwd()
-setwd("/Users/YingXu/Dropbox/2016Zaatari/minuteTopicModeling")
+setwd("/Users/YingXu/Dropbox/2016Zaatari/minuteTopicModeling/data")
 
 ### install packages
 
@@ -14,103 +14,127 @@ install.packages("lda") #latent Dirichlet allocation
 #4. copy respective files from gsl into -I/opt/local/Library/Frameworks/R.framework/Resources/include,
 # as error messages showed.
 
-install.packages("topicmodels")
+install.packages("topicmodels") #topicmodels
+install.packages("LDAvis") #LDA visualization
+install.packages('servr') 
 
 library(topicmodels)
 library(lda)
 library(tm)
+library(LDAvis)
+library(servr)
 
 ######################################################
 ### read data
 
-minutes <- read.csv("template.csv")
-names(minutes)
-head(minutes)
-
+minutes_men <- read.csv("MinutesMan.csv")
+minutes_women <- read.csv("MinutesWoman.csv")
+names(minutes_men)
+names(minutes_women)
 
 ######################################################
-
 ###check on the discrepancies between attendance and concerned NGOs
 
-
+# if concerned ngo is TRUE, check whether they are in the name of participation
 
 ######################################################
 ####### Topic Modleing with Minutes Details ##########
 
-###pre-process data into matrices
+#get minutes details
+minutes_men$detail.full = paste(minutes_men$Details.incidents,minutes_men$Causes.Gaps,
+                                minutes_men$Proposed_Solutions)
+minutes.detail = minutes_men$detail.full
 
-#create minutes detail corpus
-minutes.detail = Corpus(VectorSource(minutes$Details.incidents))
+minutes_men$response.full = paste(minutes_men$Sector_response, minutes_men$Agreements_Action_Points)
+minutes.detail = minutes_men$response.full
 
-#transform to lower case
-#minutes.detail = tm_map(minutes.detail, content_transformer(tolower))
+########## main function ##########
+#replace or delete stop words and theme-related words
+stop_words = stopwords("SMART")
+minutes.detail=gsub("'","", minutes.detail)
+minutes.detail = gsub("[[:punct:]]"," ", minutes.detail)
+minutes.detail = gsub("[[:cntrl:]]", " ",minutes.detail)
+minutes.detail = gsub("don\xfc\xbe\x8c\x83\xa4\xbct", "", minutes.detail)
+minutes.detail = gsub("can\xfc\xbe\x8c\x83\xa4\xbct", "", minutes.detail)
+minutes.detail = gsub("it\xfc\xbe\x8c\x83\xa4\xbcs", "", minutes.detail)
+minutes.detail = gsub("aren\xfc\xbe\x8c\x83\xa4\xbct", "", minutes.detail)
+minutes.detail = gsub("s\xfc\xbe\x8c\x83\xa4\xbc", "", minutes.detail)
+minutes.detail = gsub("that\xfc\xbe\x8c\x83\xa4\xbcs", "", minutes.detail)
+minutes.detail = gsub("there\xfc\xbe\x8c\x83\xa4\xbcs", "", minutes.detail)
+minutes.detail = gsub("doesn\xfc\xbe\x8c\x83\xa4\xbct", "", minutes.detail)
+minutes.detail = gsub("ngo\xfc\xbe\x8c\x83\xa4\xbcs", "", minutes.detail)
 
-#remove potentially problematic symbols
-#toSpace = content_transformer(function(x,pattern) {return (gsub(pattern," ",x))})
-#minutes.detail = tm_map(minutes.detail, toSpace, "-")
-#minutes.detail = tm_map(minutes.detail, toSpace, "'")
+minutes.detail = gsub('[[:digit:]]+', " ", minutes.detail)
+minutes.detail = tolower(minutes.detail)
 
-#remove punctuation
-#minutes.detail = tm_map(minutes.detail, removePunctuation)
-
-#remove stopwords
-minutes.detail = tm_map(minutes.detail, removeWords, stopwords("SMART"))
-
-#remove whitespace
-#minutes.detail= tm_map(minutes.detail, stripWhitespace)
-
-#write lines to check the process
-writeLines(as.character(minutes.detail[2]))
-Document
-
-#create document-term matrices
-minutes.detail.matrix = DocumentTermMatrix(minutes.detail,
-                        control = list(removePunctuation = TRUE, removeNumber = TRUE, stopwords = TRUE))
-minutes.detail.matrix
+minutes.detail = gsub("refugee","", minutes.detail)
+minutes.detail = gsub("camp","", minutes.detail)
+minutes.detail = gsub("pm","", minutes.detail)
+minutes.detail = gsub("dont","", minutes.detail)
+minutes.detail = gsub("person","", minutes.detail)
+minutes.detail = gsub("people","", minutes.detail)
+minutes.detail = gsub("st","", minutes.detail)
+minutes.detail = gsub("days","", minutes.detail)
+minutes.detail = gsub("proper","", minutes.detail)
+#minutes.detail = gsub("na","", minutes.detail)
 
 
-###topic modeling with "topicmodels"
+#tokenize on space and output a a list
+minutes.detail.list = strsplit(minutes.detail, "[[:space:]]+")
 
-#set parameters for Gibbs sampling
-burnin = 4000
-iter = 2000
-thin = 50
-seed = list(2003, 5, 63, 100001, 765)
-nstart = 5
-best = TRUE
+#compute the table of terms
+minutes.detail.term = table(unlist(minutes.detail.list))
+minutes.detail.term = sort(minutes.detail.term, decreasing = TRUE)
 
-# set number of topics
-k = 5
+#remove terms hat are stop words or ocur fewer than 5 times:
+delete = names(minutes.detail.term) %in% stop_words | minutes.detail.term < 5
+minutes.detail.term = minutes.detail.term [!delete]
+vocab = names (minutes.detail.term)
 
-# run lda using Gibbs samplign
-minute.detail.lda = LDA(minutes.detail.matrix, k, method = "Gibbs",control = list(nstart = nstart, 
-                    seed = seed, best = best, burnin = burnin, iter = iter, thin = thin))
+# put the documents into the format required by lda
+minutes.detail.getting.term = function (x) {
+  index = match(x, vocab)
+  index = index[!is.na(index)]
+  rbind(as.integer(index - 1), as.integer(rep(1, length(index))))
+}
+minutes.detail.document = lapply(minutes.detail.list, minutes.detail.getting.term)
 
-# turning lda results to topics
-minutes.detail.topics = as.matrix(topics(minute.detail.lda))
-minutes.detail.topics
-write.csv(minutes.detail.topics, file = paste("LDAGibbs", k, "DocsToTopics.csv"))
+d = length(minutes.detail.document) 
+w = length(vocab) 
+doc.length = sapply(minutes.detail.document, function(x) sum(x[2,]))
+N = sum(doc.length) 
+term.frequency = as.integer(minutes.detail.term)
 
-#topic 6 terms in each topic
-minutes.detail.terms = as.matrix (terms(minute.detail.lda,6))
-minutes.detail.terms
-write.csv(minutes.detail.terms, file=paste("LDAGibss", k, "TopicstoTerms.csv"))
+##lda modeling
+# MCMC and Model tuning parameters:
+k = 10
+G = 5000
+alpha = 0.02
+eta = 0.02
 
-#probabilities associated with each topic
-minutes.detail.topics.probabilities = as.data.frame(minute.detail.lda@gamma)
-write.csv(minutes.detail.topics.probabilities, file=paste("LDAGibbs", k, "TopicProbabilites.csv"))
+#fit the model:
+set.seed(27)
+minutes.detail.lda.fit = lda.collapsed.gibbs.sampler(documents = minutes.detail.document, K = k, vocab = vocab, 
+                                                     num.iterations = G, alpha = alpha, eta = eta, initial = NULL,
+                                                     burnin = 0, compute.log.likelihood = TRUE)
 
-#find relative importance of top 2 topics
-topic1AndTopic2 = lapply(1:nrow(minutes.detail.matrix), function(x)
-  sort(minutes.detail.topics.probabilities[x,]) [k]/sort(minutes.detail.topics.probabilities[x,])[k-1])
+##visualizing with LDAvis
+theta = t(apply(minutes.detail.lda.fit$document_sums + alpha, 2, function(x) x/sum(x)))
+phi = t(apply(t(minutes.detail.lda.fit$topics) + eta, 2, function(x) x/sum(x)))
 
-#find relative importance of the second and the third most important topics
-topic2AndTopic3 = lapply(1:nrow(minutes.detail.matrix), function(x)
-  sort(minutes.detail.topics.probabilities[x,]) [k-1]/sort(minutes.detail.topics.probabilities[x,])[k-2])
+minutesDetail.men = list(phi = phi, theta = theta, doc.length = doc.length, vocab = vocab, term.frequency = term.frequency)
 
-#write
-write.csv(topic1AndTopic2, file=paste("LDAGibbs",k,"Topic1andTopic2.csv"))
-write.csv(topic2AndTopic3, file=paste("LDAGibbs",k,"Topic2andTopic3.csv"))
+# create JSON file
+minutes.detail.men.json = createJSON(phi = minutesDetail.men$phi,   #topic*vocab
+                                     theta = minutesDetail.men$theta, #document*topic
+                                     doc.length = minutesDetail.men$doc.length, #length of each document
+                                     vocab = minutesDetail.men$vocab, 
+                                     term.frequency = minutesDetail.men$term.frequency,
+                                     plot.opts = list(xlab = "Principle Component 1", ylab = "Principle Component 2"))
+
+#generate interactive visualization
+serVis(minutes.detail.men.json, out.dir = 'vis_responses', open.brower = FALSE)
+
 
 
 
@@ -122,85 +146,3 @@ write.csv(topic2AndTopic3, file=paste("LDAGibbs",k,"Topic2andTopic3.csv"))
 
 ######################################################
 ######## Topic Modleing with NGOs Response ###########
-
-###pre-process data into matrices
-
-#create minutes detail corpus
-minutes.detail = Corpus(VectorSource(minutes$Details.incidents))
-
-#transform to lower case
-#minutes.detail = tm_map(minutes.detail, content_transformer(tolower))
-
-#remove potentially problematic symbols
-#toSpace = content_transformer(function(x,pattern) {return (gsub(pattern," ",x))})
-#minutes.detail = tm_map(minutes.detail, toSpace, "-")
-#minutes.detail = tm_map(minutes.detail, toSpace, "'")
-
-#remove punctuation
-#minutes.detail = tm_map(minutes.detail, removePunctuation)
-
-#remove stopwords
-minutes.detail = tm_map(minutes.detail, removeWords, stopwords("SMART"))
-
-#remove whitespace
-#minutes.detail= tm_map(minutes.detail, stripWhitespace)
-
-#write lines to check the process
-writeLines(as.character(minutes.detail[2]))
-Document
-
-#create document-term matrices
-minutes.detail.matrix = DocumentTermMatrix(minutes.detail,
-                                           control = list(removePunctuation = TRUE, removeNumber = TRUE, stopwords = TRUE))
-minutes.detail.matrix
-
-
-###topic modeling with "topicmodels"
-
-#set parameters for Gibbs sampling
-burnin = 4000
-iter = 2000
-thin = 50
-seed = list(2003, 5, 63, 100001, 765)
-nstart = 5
-best = TRUE
-
-# set number of topics
-k = 5
-
-# run lda using Gibbs samplign
-minute.detail.lda = LDA(minutes.detail.matrix, k, method = "Gibbs",control = list(nstart = nstart, 
-                                                                                  seed = seed, best = best, burnin = burnin, iter = iter, thin = thin))
-
-# turning lda results to topics
-minutes.detail.topics = as.matrix(topics(minute.detail.lda))
-minutes.detail.topics
-write.csv(minutes.detail.topics, file = paste("LDAGibbs", k, "DocsToTopics.csv"))
-
-#topic 6 terms in each topic
-minutes.detail.terms = as.matrix (terms(minute.detail.lda,6))
-minutes.detail.terms
-write.csv(minutes.detail.terms, file=paste("LDAGibss", k, "TopicstoTerms.csv"))
-
-#probabilities associated with each topic
-minutes.detail.topics.probabilities = as.data.frame(minute.detail.lda@gamma)
-write.csv(minutes.detail.topics.probabilities, file=paste("LDAGibbs", k, "TopicProbabilites.csv"))
-
-#find relative importance of top 2 topics
-topic1AndTopic2 = lapply(1:nrow(minutes.detail.matrix), function(x)
-  sort(minutes.detail.topics.probabilities[x,]) [k]/sort(minutes.detail.topics.probabilities[x,])[k-1])
-
-#find relative importance of the second and the third most important topics
-topic2AndTopic3 = lapply(1:nrow(minutes.detail.matrix), function(x)
-  sort(minutes.detail.topics.probabilities[x,]) [k-1]/sort(minutes.detail.topics.probabilities[x,])[k-2])
-
-#write
-write.csv(topic1AndTopic2, file=paste("LDAGibbs",k,"Topic1andTopic2.csv"))
-write.csv(topic2AndTopic3, file=paste("LDAGibbs",k,"Topic2andTopic3.csv"))
-
-
-
-### Within District / Cross Topic
-
-
-### Cross District / Within Topic
